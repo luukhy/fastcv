@@ -14,7 +14,25 @@ setup(
                 "kernels/erosion.cu",
                 "kernels/module.cpp",
             ],
-            extra_compile_args={"cxx": ["-O2"]},
+            extra_compile_args={
+                "cxx": [
+                    "/permissive-", 
+                    "/Zc:__cplusplus", 
+                    "/std:c++17", 
+                    "/D_WIN64",
+                    "/NOMINMAX"
+                ],
+                "nvcc": [
+                    "-O3",
+                    "-std=c++17",
+                    "-allow-unsupported-compiler",
+                    "-D_WIN64",
+                    "-Xcompiler", "/permissive-",
+                    "-Xcompiler", "/Zc:__cplusplus",
+                    "-Xcompiler", "/std:c++17",
+                    "-Xcompiler", "/DNOMINMAX",
+                ]
+            },
         ),
     ],
     cmdclass={"build_ext": BuildExtension},
