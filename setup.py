@@ -13,6 +13,7 @@ setup(
                 "kernels/dilation.cu",
                 "kernels/erosion.cu",
                 "kernels/module.cpp",
+                "kernels/ccl.cu",
             ],
             extra_compile_args={
                 "cxx": [
