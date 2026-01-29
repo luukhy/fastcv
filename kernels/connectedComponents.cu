@@ -21,10 +21,9 @@ struct InitLabelsFunctor {
     }
 };
 
-
-__global__ void union_kernel(
+__global__ void unionKernel(
     int* labels,
-    bool* changed,
+    int* changed,
     int width,
     int height) {
 
@@ -45,8 +44,6 @@ __global__ void union_kernel(
     
     __syncthreads();
 
-    // cant return when my_val == 0 because __syncthreads wont work and will kill the program so we set a active flag 
-    // and procede with iterations
     bool active = (my_val != 0); 
 
     int k = 0;
@@ -112,26 +109,29 @@ __global__ void union_kernel(
 
     if (new_label < labels[idx]) {
         atomicMin(&labels[idx], new_label);
-        *changed = true;
+        if(*changed == 0)
+            *changed = 1;
     }
 }
 
-__global__ void flatten_kernel(int* labels, bool* changed, int num_pixels) {
+__global__ void flattenKernel(int* labels, int* changed, int num_pixels) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_pixels) return;
 
     int my_label = labels[idx];
     if (my_label == 0) return;
 
-    int parent = labels[my_label];
+    int parent_idx = my_label - 1;  // in the initializatino we used 1-based indexing system to reserve 0 for backfround
+    int parent = labels[parent_idx];
     
     if (parent > 0 && parent < my_label) {
         atomicMin(&labels[idx], parent);
-        *changed = true;
+        if(*changed == 0)
+            *changed = 1;   // !!! technically a race conditino but since we have a check if == 0 and all kernels set the same value it is skippable for now 
     }
 }
 
-torch::Tensor connected_components(torch::Tensor input) {
+torch::Tensor connectedComponents(torch::Tensor input) {
     TORCH_CHECK(input.is_cuda(), "Input tensor must be on CUDA device");
     TORCH_CHECK(input.scalar_type() == torch::kUInt8, "Input must be uint8 (byte) binary image");
 
@@ -152,18 +152,17 @@ torch::Tensor connected_components(torch::Tensor input) {
         InitLabelsFunctor(input.data_ptr<unsigned char>())
     );
 
-    auto changed_tensor = torch::zeros({1}, torch::dtype(torch::kBool).device(input.device()));
-    bool* d_changed = changed_tensor.data_ptr<bool>();
+    auto changed_tensor = torch::zeros({1}, torch::dtype(torch::kInt32).device(input.device()));
+    int* d_changed = changed_tensor.data_ptr<int>();
     bool h_changed = true;
 
     int max_iter = width * height;
     int iter = 0;
 
     while (h_changed && iter < max_iter) {
-        h_changed = false;
-        cudaMemcpy(d_changed, &h_changed, sizeof(bool), cudaMemcpyHostToDevice);
+        changed_tensor.zero_();
 
-        union_kernel<<<blocks, threads>>>(
+        unionKernel<<<blocks, threads>>>(
             labels.data_ptr<int>(),
             d_changed,
             width,
@@ -173,13 +172,15 @@ torch::Tensor connected_components(torch::Tensor input) {
         int threads_flat = 256;
         int blocks_flat = (num_pixels + threads_flat - 1) / threads_flat;
 
-        flatten_kernel<<<blocks_flat, threads_flat>>>(
+        flattenKernel<<<blocks_flat, threads_flat>>>(
             labels.data_ptr<int>(),
             d_changed,
             num_pixels
         );
 
-        cudaMemcpy(&h_changed, d_changed, sizeof(bool), cudaMemcpyDeviceToHost);
+        if (changed_tensor.item<int>() == 0){
+            h_changed = false;
+        }
         iter++;
     }
 
@@ -191,7 +192,8 @@ torch::Tensor connected_components(torch::Tensor input) {
     return labels;
 }
 
-__global__ void naive_union_kernel(int* labels,
+
+__global__ void naiveUnionKernel(int* labels,
                             bool* changed,
                             int width,
                             int height){
@@ -252,7 +254,7 @@ __global__ void naive_union_kernel(int* labels,
     
 }
 
-torch::Tensor naive_connected_components(torch::Tensor input) {
+torch::Tensor naiveConnectedComponents(torch::Tensor input) {
     TORCH_CHECK(input.is_cuda(), "Input tensor must be on CUDA device");
     TORCH_CHECK(input.scalar_type() == torch::kUInt8, "Input must be uint8 (byte) binary image");
 
@@ -286,7 +288,7 @@ torch::Tensor naive_connected_components(torch::Tensor input) {
         h_changed = false;
         cudaMemcpy(d_changed, &h_changed, sizeof(bool), cudaMemcpyHostToDevice);
 
-        naive_union_kernel<<<blocks, threads>>>(
+        naiveUnionKernel<<<blocks, threads>>>(
             labels.data_ptr<int>(),
             d_changed,
             width,
